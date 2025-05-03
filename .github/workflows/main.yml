@@ -31,8 +31,7 @@ jobs:
 
       - name: Install Utilities
         run: |
-          sudo apt-get update
-          sudo apt-get install -y jq unzip
+          sudo dnf install -y jq unzip
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v1
@@ -79,14 +78,16 @@ jobs:
 
       - name: Free up disk space
         run: |
-          echo "Cleaning Docker and system junk to free space..."
-          docker container prune -f
-          docker image prune -af
-          docker volume prune -f
-          docker builder prune -af
-          sudo apt-get clean
-          sudo rm -rf /var/lib/apt/lists/*
+          echo "Before cleanup:"
           df -h
+
+          # Remove Docker images, containers, volumes, networks not in use
+          docker system prune -a -f --volumes
+
+          # Optionally remove unused packages (if applicable)
+          sudo dnf clean all || true
+
+          echo "After cleanup:"
 
       - name: Pull latest Docker image
         run: |
