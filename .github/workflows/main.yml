@@ -33,6 +33,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y jq unzip
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v1
         with:
@@ -51,13 +52,10 @@ jobs:
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
           IMAGE_TAG: latest
         run: |
-          # Build a docker container and
-          # push it to ECR so that it can
-          # be deployed to ECS.
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           echo "::set-output name=image::$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-  
+
   Continuous-Deployment:
     needs: build-and-push-ecr-image
     runs-on: self-hosted
@@ -76,22 +74,41 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
 
-      - name: Pull latest images
+      - name: Check disk usage before cleanup
+        run: df -h
+
+      - name: Free up disk space
+        run: |
+          echo "Cleaning Docker and system junk to free space..."
+          docker container prune -f
+          docker image prune -af
+          docker volume prune -f
+          docker builder prune -af
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+          df -h
+
+      - name: Pull latest Docker image
         run: |
           docker pull ${{ secrets.AWS_ECR_LOGIN_URI }}/${{ secrets.ECR_REPOSITORY_NAME }}:latest
 
-      - name: Stop and remove existing container (if exists)
+      - name: Stop and remove existing container if it exists
         run: |
-          docker ps -a -q --filter "name=networksecurity" | grep -q . && docker stop networksecurity && docker rm -fv networksecurity || echo "No existing container to remove"
+          if docker ps -a --format '{{.Names}}' | grep -Eq "^networksecurity$"; then
+            echo "Stopping and removing existing container: networksecurity"
+            docker stop networksecurity || true
+            docker rm -f networksecurity || true
+          fi
 
-      - name: Run Docker Image to serve users
+      - name: Run Docker container
         run: |
-          docker run -d -p 8080:8080 --ipc="host" --name=networksecurity \
-          -e 'AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}' \
-          -e 'AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}' \
-          -e 'AWS_REGION=${{ secrets.AWS_REGION }}' \
-          ${{ secrets.AWS_ECR_LOGIN_URI }}/${{ secrets.ECR_REPOSITORY_NAME }}:latest
+          docker run -d -p 8080:8080 --ipc="host" \
+            --name=networksecurity \
+            -e 'AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}' \
+            -e 'AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}' \
+            -e 'AWS_REGION=${{ secrets.AWS_REGION }}' \
+            ${{ secrets.AWS_ECR_LOGIN_URI }}/${{ secrets.ECR_REPOSITORY_NAME }}:latest
 
-      - name: Clean previous images and containers
+      - name: Final cleanup (optional)
         run: |
           docker system prune -f
